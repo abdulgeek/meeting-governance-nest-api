@@ -25,6 +25,44 @@
 
 [Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
 
+## Setup
+
+### Environment variables
+
+Create a `.env` file in this directory with:
+
+| Variable            | Required | Description                                              |
+| ------------------- | -------- | -------------------------------------------------------- |
+| `MONGO_URI`         | yes      | MongoDB connection string (e.g. `mongodb://localhost:27017/governance`). |
+| `JWT_SECRET`        | yes      | Secret used to sign/verify auth tokens. Startup fails fast if unset. |
+| `PORT`              | no       | Port the API listens on (defaults to `4000`).            |
+| `PYTHON_ENGINE_URL` | no       | Base URL of the Python governance engine (defaults to `http://localhost:8000`). |
+
+### Install
+
+```bash
+$ npm install
+```
+
+### Run MongoDB
+
+The API needs a running MongoDB reachable at `MONGO_URI`, e.g.:
+
+```bash
+$ docker run -p 27017:27017 mongo
+```
+
+### Run the API
+
+```bash
+# development (watch mode)
+$ npm run start:dev
+
+# production build + run
+$ npm run build
+$ npm run start:prod
+```
+
 ## Project setup
 
 ```bash

@@ -125,11 +125,21 @@ export class MeetingsService {
   async join(owner: string, meetingId: string, meetingUrl: string, token: string, separate = true) {
     await this.get(owner, meetingId);
     const engine = this.config.get<string>('PYTHON_ENGINE_URL') ?? 'http://localhost:8000';
-    const res = await fetch(`${engine}/bots`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ meeting_url: meetingUrl, meeting_id: meetingId, token, separate }),
-    });
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), 5000);
+    let res: Response;
+    try {
+      res = await fetch(`${engine}/bots`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ meeting_url: meetingUrl, meeting_id: meetingId, token, separate }),
+        signal: ctrl.signal,
+      });
+    } catch {
+      throw new BadGatewayException('Could not reach the meeting engine');
+    } finally {
+      clearTimeout(timeout);
+    }
     if (!res.ok) throw new BadGatewayException(await res.text());
     const { bot_id, status } = await res.json();
     await this.meetings.updateOne(
@@ -144,7 +154,15 @@ export class MeetingsService {
     const m = await this.get(owner, meetingId);
     const engine = this.config.get<string>('PYTHON_ENGINE_URL') ?? 'http://localhost:8000';
     if (m.recallBotId) {
-      await fetch(`${engine}/bots/${m.recallBotId}`, { method: 'DELETE' });
+      const ctrl = new AbortController();
+      const timeout = setTimeout(() => ctrl.abort(), 5000);
+      try {
+        await fetch(`${engine}/bots/${m.recallBotId}`, { method: 'DELETE', signal: ctrl.signal });
+      } catch {
+        throw new BadGatewayException('Could not reach the meeting engine');
+      } finally {
+        clearTimeout(timeout);
+      }
     }
     await this.meetings.updateOne({ _id: meetingId }, { $set: { botStatus: 'stopped' } });
     return { ok: true };
