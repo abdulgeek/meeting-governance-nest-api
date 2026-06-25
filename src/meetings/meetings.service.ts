@@ -8,7 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { createHash } from 'crypto';
 import { Model } from 'mongoose';
-import { createStoredKey, decrypt, encrypt, loadDataKey } from '../crypto/crypto.util';
+import { decrypt, encrypt, genKey } from '../crypto/crypto.util';
 import { DecisionDto } from './dto';
 import { GovernedLine, GovernedLineDocument } from './schemas/governed-line.schema';
 import { MeetingKey, MeetingKeyDocument } from './schemas/meeting-key.schema';
@@ -37,15 +37,8 @@ export class MeetingsService {
 
   async create(owner: string, title: string) {
     const meeting = await this.meetings.create({ owner, title });
-    // give the meeting its own data key up front (used to encrypt every kept line).
-    // createStoredKey() is KMS-aware: env-gated envelope encryption when KMS_KEY_ID is
-    // set, otherwise a raw base64 key exactly as before (wrapped:false).
-    const stored = await createStoredKey();
-    await this.keys.create({
-      meeting: String(meeting._id),
-      key: stored.key,
-      wrapped: stored.wrapped,
-    });
+    // give the meeting its own data key up front (used to encrypt every kept line)
+    await this.keys.create({ meeting: String(meeting._id), key: genKey() });
     return meeting;
   }
 
@@ -70,7 +63,7 @@ export class MeetingsService {
     let enc;
     if (KEEP_TEXT.has(d.action) && d.shown) {
       const k = await this.keys.findOne({ meeting: meetingId });
-      if (k) enc = encrypt(d.shown, await loadDataKey(k)); // unwrap key (no-op when not KMS-wrapped)
+      if (k) enc = encrypt(d.shown, k.key);
     }
     const line = await this.lines.create({
       meeting: meetingId,
@@ -102,8 +95,7 @@ export class MeetingsService {
       this.lines.find({ meeting: meetingId }).sort({ idx: 1 }),
       this.keys.findOne({ meeting: meetingId }),
     ]);
-    // unwrap the data key once (no-op when not KMS-wrapped); null if shredded.
-    const dataKey = k ? await loadDataKey(k) : null;
+    const dataKey = k ? k.key : null; // null if the key was shredded
     return lines.map((l) => {
       let text: string | null = null;
       let shredded = false;
@@ -211,7 +203,7 @@ export class MeetingsService {
     await this.get(owner, meetingId);
     const k = await this.keys.findOne({ meeting: meetingId });
     if (!k) return { summary: '' }; // shredded -> nothing to summarize
-    const dataKey = await loadDataKey(k);
+    const dataKey = k.key;
 
     const lines = await this.lines.find({ meeting: meetingId }).sort({ idx: 1 });
     const kept = lines
@@ -253,7 +245,7 @@ export class MeetingsService {
     if (!m.summaryEnc) return { summary: null, shredded: false, generatedAt: null };
     const k = await this.keys.findOne({ meeting: meetingId });
     if (!k) return { summary: null, shredded: true, generatedAt: m.summaryAt ?? null };
-    const dataKey = await loadDataKey(k);
+    const dataKey = k.key;
     return {
       summary: decrypt(m.summaryEnc, dataKey),
       shredded: false,
@@ -368,7 +360,7 @@ export class MeetingsService {
         this.lines.find({ meeting: meetingId, speaker: participant.name }).sort({ idx: 1 }),
         this.keys.findOne({ meeting: meetingId }),
       ]);
-      const dataKey = k ? await loadDataKey(k) : null;
+      const dataKey = k ? k.key : null;
       const kept = lines
         .filter((l) => KEEP_TEXT.has(l.action) && l.enc)
         .map((l) => ({

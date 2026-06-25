@@ -37,18 +37,12 @@ Create a `.env` file in this directory with:
 | `JWT_SECRET`        | yes      | Secret used to sign/verify auth tokens. Startup fails fast if unset. |
 | `PORT`              | no       | Port the API listens on (defaults to `4000`).            |
 | `PYTHON_ENGINE_URL` | no       | Base URL of the Python governance engine (defaults to `http://localhost:8000`). |
-| `KMS_KEY_ID`        | no       | **Optional, off by default.** AWS KMS key id/ARN. When set, each meeting's data key is wrapped (envelope-encrypted) under this KMS key and only the ciphertext blob is stored — the plaintext data key is never persisted. When unset, raw local AES-256 data keys are used (behavior is byte-identical to not having this feature). |
-| `AWS_REGION`        | no       | AWS region for the KMS client (defaults to `us-east-1`). Only used when `KMS_KEY_ID` is set. |
 
-#### Crypto-shredding & KMS (envelope encryption)
+#### Crypto-shredding
 
 Every meeting gets its own AES-256 data key; all kept lines (and the governed summary) are
 encrypted under it. Deleting that key ("crypto-shred") makes the content permanently
-unreadable. By default the data key is a raw local key. If `KMS_KEY_ID` is set, the data key
-is instead wrapped under your KMS key (envelope encryption) and only the wrapped ciphertext
-blob is stored — the engine asks KMS to unwrap it on demand. This is defense-in-depth so a DB
-leak alone never exposes plaintext. Fully env-gated: with no `KMS_KEY_ID`, the crypto path is
-unchanged.
+unreadable — provable absence without trusting row deletion.
 
 #### Honest MVP boundaries
 
