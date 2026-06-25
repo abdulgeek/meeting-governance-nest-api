@@ -122,13 +122,13 @@ export class MeetingsService {
    * engine owns that (and the audio websocket). We proxy through it and pass the
    * caller's JWT so the engine can post decisions back to us for this meeting.
    */
-  async join(owner: string, meetingId: string, meetingUrl: string, token: string) {
+  async join(owner: string, meetingId: string, meetingUrl: string, token: string, separate = true) {
     await this.get(owner, meetingId);
     const engine = this.config.get<string>('PYTHON_ENGINE_URL') ?? 'http://localhost:8000';
     const res = await fetch(`${engine}/bots`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ meeting_url: meetingUrl, meeting_id: meetingId, token }),
+      body: JSON.stringify({ meeting_url: meetingUrl, meeting_id: meetingId, token, separate }),
     });
     if (!res.ok) throw new BadGatewayException(await res.text());
     const { bot_id, status } = await res.json();

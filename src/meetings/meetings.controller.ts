@@ -67,7 +67,7 @@ export class MeetingsController {
   @Post(':id/join')
   join(@Req() req: any, @Param('id') id: string, @Body() dto: JoinDto) {
     const token = (req.headers['authorization'] as string).slice(7);
-    return this.meetings.join(req.user.sub, id, dto.meetingUrl, token);
+    return this.meetings.join(req.user.sub, id, dto.meetingUrl, token, dto.separate ?? true);
   }
 
   // Remove the bot from the call.

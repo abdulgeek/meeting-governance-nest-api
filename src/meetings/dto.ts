@@ -41,4 +41,9 @@ export class JoinDto {
   @IsString()
   @MinLength(1)
   meetingUrl: string;
+
+  // per-speaker: record each participant on their own stream + consent. Default on.
+  @IsOptional()
+  @IsBoolean()
+  separate?: boolean;
 }
