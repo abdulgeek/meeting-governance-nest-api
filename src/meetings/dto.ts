@@ -36,3 +36,9 @@ export class ConsentDto {
   @IsBoolean()
   granted: boolean;
 }
+
+export class JoinDto {
+  @IsString()
+  @MinLength(1)
+  meetingUrl: string;
+}

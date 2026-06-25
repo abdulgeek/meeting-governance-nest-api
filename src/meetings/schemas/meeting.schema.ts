@@ -13,6 +13,15 @@ export class Meeting {
 
   @Prop({ default: 'created' })
   status: string; // created | live | ended
+
+  @Prop()
+  meetingUrl?: string; // the Zoom/Meet/Teams URL the bot was sent to
+
+  @Prop()
+  recallBotId?: string; // id of the Recall bot launched for this meeting
+
+  @Prop({ default: 'idle' })
+  botStatus?: string; // idle | joining | stopped (and whatever Recall reports)
 }
 
 export const MeetingSchema = SchemaFactory.createForClass(Meeting);

@@ -1,4 +1,10 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadGatewayException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { decrypt, encrypt, genKey } from '../crypto/crypto.util';
@@ -18,6 +24,7 @@ export class MeetingsService {
     @InjectModel(GovernedLine.name) private lines: Model<GovernedLineDocument>,
     @InjectModel(MeetingKey.name) private keys: Model<MeetingKeyDocument>,
     @InjectModel(Participant.name) private participants: Model<ParticipantDocument>,
+    private config: ConfigService,
   ) {}
 
   async create(owner: string, title: string) {
@@ -108,5 +115,38 @@ export class MeetingsService {
 
   listParticipants(meetingId: string) {
     return this.participants.find({ meeting: meetingId }).sort({ name: 1 });
+  }
+
+  /**
+   * Send a Recall bot into a live call. We don't talk to Recall directly: the Python
+   * engine owns that (and the audio websocket). We proxy through it and pass the
+   * caller's JWT so the engine can post decisions back to us for this meeting.
+   */
+  async join(owner: string, meetingId: string, meetingUrl: string, token: string) {
+    await this.get(owner, meetingId);
+    const engine = this.config.get<string>('PYTHON_ENGINE_URL') ?? 'http://localhost:8000';
+    const res = await fetch(`${engine}/bots`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ meeting_url: meetingUrl, meeting_id: meetingId, token }),
+    });
+    if (!res.ok) throw new BadGatewayException(await res.text());
+    const { bot_id, status } = await res.json();
+    await this.meetings.updateOne(
+      { _id: meetingId },
+      { $set: { recallBotId: bot_id, botStatus: 'joining', meetingUrl } },
+    );
+    return { botId: bot_id, status };
+  }
+
+  /** Pull the bot out of the call (also via the Python engine). */
+  async stop(owner: string, meetingId: string) {
+    const m = await this.get(owner, meetingId);
+    const engine = this.config.get<string>('PYTHON_ENGINE_URL') ?? 'http://localhost:8000';
+    if (m.recallBotId) {
+      await fetch(`${engine}/bots/${m.recallBotId}`, { method: 'DELETE' });
+    }
+    await this.meetings.updateOne({ _id: meetingId }, { $set: { botStatus: 'stopped' } });
+    return { ok: true };
   }
 }

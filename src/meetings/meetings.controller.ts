@@ -9,7 +9,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { ConsentDto, CreateMeetingDto, DecisionDto } from './dto';
+import { ConsentDto, CreateMeetingDto, DecisionDto, JoinDto } from './dto';
 import { MeetingsService } from './meetings.service';
 
 @Controller('meetings')
@@ -60,5 +60,19 @@ export class MeetingsController {
   @Post(':id/consent')
   consent(@Req() req: any, @Param('id') id: string, @Body() dto: ConsentDto) {
     return this.meetings.setConsent(req.user.sub, id, dto.participant, dto.granted);
+  }
+
+  // Send a Recall bot into a live call (proxied through the Python engine).
+  // We forward the caller's raw token so the engine can post decisions back here.
+  @Post(':id/join')
+  join(@Req() req: any, @Param('id') id: string, @Body() dto: JoinDto) {
+    const token = (req.headers['authorization'] as string).slice(7);
+    return this.meetings.join(req.user.sub, id, dto.meetingUrl, token);
+  }
+
+  // Remove the bot from the call.
+  @Post(':id/stop')
+  stop(@Req() req: any, @Param('id') id: string) {
+    return this.meetings.stop(req.user.sub, id);
   }
 }
