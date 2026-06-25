@@ -4,6 +4,7 @@ import { AuthModule } from '../auth/auth.module';
 import { MeetingsController } from './meetings.controller';
 import { MeetingsService } from './meetings.service';
 import { GovernedLine, GovernedLineSchema } from './schemas/governed-line.schema';
+import { MeetingKey, MeetingKeySchema } from './schemas/meeting-key.schema';
 import { Meeting, MeetingSchema } from './schemas/meeting.schema';
 
 @Module({
@@ -12,6 +13,7 @@ import { Meeting, MeetingSchema } from './schemas/meeting.schema';
     MongooseModule.forFeature([
       { name: Meeting.name, schema: MeetingSchema },
       { name: GovernedLine.name, schema: GovernedLineSchema },
+      { name: MeetingKey.name, schema: MeetingKeySchema },
     ]),
   ],
   controllers: [MeetingsController],

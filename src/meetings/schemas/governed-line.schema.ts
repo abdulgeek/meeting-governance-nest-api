@@ -4,9 +4,10 @@ import { HydratedDocument } from 'mongoose';
 export type GovernedLineDocument = HydratedDocument<GovernedLine>;
 
 /**
- * One persisted governance decision. The `text` field is only ever populated for
- * COMMIT / REDACT / FLAG. For DROP / DECLINE it stays undefined, so the database
- * never holds suppressed content - the ephemerality promise, enforced at the DB edge.
+ * One persisted governance decision. Text only exists for COMMIT / REDACT / FLAG, and
+ * even then it's stored ENCRYPTED in `enc` (per-meeting key). For DROP / DECLINE there's
+ * no text at all. So: the DB never holds suppressed content (ephemerality boundary), and
+ * kept content is unreadable once the meeting's key is shredded (Phase 4).
  */
 @Schema({ timestamps: true })
 export class GovernedLine {
@@ -28,8 +29,8 @@ export class GovernedLine {
   @Prop()
   confidence?: number;
 
-  @Prop()
-  text?: string; // present ONLY for COMMIT/REDACT/FLAG
+  @Prop({ type: Object })
+  enc?: { ct: string; iv: string; tag: string }; // encrypted text; present only for keep-actions
 
   @Prop()
   flagged?: boolean;

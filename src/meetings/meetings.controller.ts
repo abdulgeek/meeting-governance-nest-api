@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Post,
@@ -40,5 +41,11 @@ export class MeetingsController {
   @Post(':id/lines')
   addLine(@Req() req: any, @Param('id') id: string, @Body() dto: DecisionDto) {
     return this.meetings.addDecision(req.user.sub, id, dto);
+  }
+
+  // Crypto-shred: destroy the meeting's key so all stored text becomes unreadable.
+  @Delete(':id/key')
+  shred(@Req() req: any, @Param('id') id: string) {
+    return this.meetings.shred(req.user.sub, id);
   }
 }
