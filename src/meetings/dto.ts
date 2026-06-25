@@ -1,4 +1,4 @@
-import { IsIn, IsNumber, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsBoolean, IsIn, IsNumber, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class CreateMeetingDto {
   @IsString()
@@ -27,4 +27,12 @@ export class DecisionDto {
   @IsOptional()
   @IsString()
   shown?: string; // the engine's display text; only stored for keep-actions
+}
+
+export class ConsentDto {
+  @IsString()
+  participant: string;
+
+  @IsBoolean()
+  granted: boolean;
 }

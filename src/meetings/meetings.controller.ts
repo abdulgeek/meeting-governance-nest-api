@@ -9,7 +9,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { CreateMeetingDto, DecisionDto } from './dto';
+import { ConsentDto, CreateMeetingDto, DecisionDto } from './dto';
 import { MeetingsService } from './meetings.service';
 
 @Controller('meetings')
@@ -47,5 +47,18 @@ export class MeetingsController {
   @Delete(':id/key')
   shred(@Req() req: any, @Param('id') id: string) {
     return this.meetings.shred(req.user.sub, id);
+  }
+
+  // Participants + their consent state (multi-party dashboard).
+  @Get(':id/participants')
+  async participants(@Req() req: any, @Param('id') id: string) {
+    await this.meetings.get(req.user.sub, id); // ownership check
+    return this.meetings.listParticipants(id);
+  }
+
+  // In-meeting consent opt-in/out (reported by the bot).
+  @Post(':id/consent')
+  consent(@Req() req: any, @Param('id') id: string, @Body() dto: ConsentDto) {
+    return this.meetings.setConsent(req.user.sub, id, dto.participant, dto.granted);
   }
 }

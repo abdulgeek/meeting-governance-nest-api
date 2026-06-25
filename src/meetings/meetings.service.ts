@@ -6,6 +6,7 @@ import { DecisionDto } from './dto';
 import { GovernedLine, GovernedLineDocument } from './schemas/governed-line.schema';
 import { MeetingKey, MeetingKeyDocument } from './schemas/meeting-key.schema';
 import { Meeting, MeetingDocument } from './schemas/meeting.schema';
+import { Participant, ParticipantDocument } from './schemas/participant.schema';
 
 // Only these actions may have their text persisted at all. DROP/DECLINE never do.
 const KEEP_TEXT = new Set(['COMMIT', 'REDACT', 'FLAG']);
@@ -16,6 +17,7 @@ export class MeetingsService {
     @InjectModel(Meeting.name) private meetings: Model<MeetingDocument>,
     @InjectModel(GovernedLine.name) private lines: Model<GovernedLineDocument>,
     @InjectModel(MeetingKey.name) private keys: Model<MeetingKeyDocument>,
+    @InjectModel(Participant.name) private participants: Model<ParticipantDocument>,
   ) {}
 
   async create(owner: string, title: string) {
@@ -48,7 +50,7 @@ export class MeetingsService {
       const k = await this.keys.findOne({ meeting: meetingId });
       if (k) enc = encrypt(d.shown, k.key);
     }
-    return this.lines.create({
+    const line = await this.lines.create({
       meeting: meetingId,
       idx: d.idx,
       speaker: d.speaker,
@@ -58,6 +60,13 @@ export class MeetingsService {
       enc,
       flagged: d.action === 'FLAG',
     });
+    // track this participant + their consent (DECLINE => not consented)
+    await this.participants.updateOne(
+      { meeting: meetingId, name: d.speaker },
+      { $set: { consent: d.action !== 'DECLINE' } },
+      { upsert: true },
+    );
+    return line;
   }
 
   async getLines(meetingId: string) {
@@ -84,5 +93,20 @@ export class MeetingsService {
     await this.get(owner, meetingId);
     await this.keys.deleteOne({ meeting: meetingId });
     return { meeting: meetingId, shredded: true };
+  }
+
+  /** In-meeting consent opt-in/out for a participant (the bot reports these live). */
+  async setConsent(owner: string, meetingId: string, name: string, granted: boolean) {
+    await this.get(owner, meetingId);
+    await this.participants.updateOne(
+      { meeting: meetingId, name },
+      { $set: { consent: granted } },
+      { upsert: true },
+    );
+    return { meeting: meetingId, name, consent: granted };
+  }
+
+  listParticipants(meetingId: string) {
+    return this.participants.find({ meeting: meetingId }).sort({ name: 1 });
   }
 }

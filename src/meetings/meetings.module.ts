@@ -6,6 +6,7 @@ import { MeetingsService } from './meetings.service';
 import { GovernedLine, GovernedLineSchema } from './schemas/governed-line.schema';
 import { MeetingKey, MeetingKeySchema } from './schemas/meeting-key.schema';
 import { Meeting, MeetingSchema } from './schemas/meeting.schema';
+import { Participant, ParticipantSchema } from './schemas/participant.schema';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { Meeting, MeetingSchema } from './schemas/meeting.schema';
       { name: Meeting.name, schema: MeetingSchema },
       { name: GovernedLine.name, schema: GovernedLineSchema },
       { name: MeetingKey.name, schema: MeetingKeySchema },
+      { name: Participant.name, schema: ParticipantSchema },
     ]),
   ],
   controllers: [MeetingsController],
