@@ -11,7 +11,11 @@ export class MeetingKey {
   meeting: string;
 
   @Prop({ required: true })
-  key: string; // base64 AES-256 key
+  key: string; // base64: raw AES-256 key (wrapped:false) OR KMS ciphertext blob (wrapped:true)
+
+  // envelope encryption flag - see crypto.util.ts. Default false = raw key (today's behavior).
+  @Prop({ default: false })
+  wrapped?: boolean;
 }
 
 export const MeetingKeySchema = SchemaFactory.createForClass(MeetingKey);

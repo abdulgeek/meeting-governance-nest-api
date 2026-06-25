@@ -27,3 +27,69 @@ export function decrypt(enc: Enc, keyB64: string): string {
   d.setAuthTag(Buffer.from(enc.tag, 'base64'));
   return Buffer.concat([d.update(Buffer.from(enc.ct, 'base64')), d.final()]).toString('utf8');
 }
+
+// ---------------------------------------------------------------------------
+// KMS-wrapped keys (envelope encryption) - ENV-GATED, off by default.
+//
+// What's stored in MeetingKey.key is always a base64 string. The `wrapped` flag
+// tells us how to interpret it:
+//   - wrapped:false (DEFAULT, no KMS_KEY_ID) -> it's the RAW base64 AES-256 data
+//     key, exactly as today. The sync encrypt()/decrypt() above take this raw key.
+//   - wrapped:true (KMS_KEY_ID set) -> it's a base64 KMS *ciphertext blob*: the data
+//     key encrypted under the customer KMS key. We never persist the plaintext data
+//     key; we ask KMS to unwrap it on demand and hold it only in memory.
+//
+// IMPORTANT: with no KMS_KEY_ID the path is byte-identical to before - createStoredKey()
+// returns genKey() and loadDataKey() returns stored.key untouched. KMS is purely additive.
+//
+// The @aws-sdk/client-kms import is deferred (require) so the dependency is only loaded
+// when KMS is actually enabled - keeps the default path free of AWS SDK overhead.
+// ---------------------------------------------------------------------------
+
+export type StoredKey = { key: string; wrapped: boolean };
+
+function kmsClient() {
+  // Lazy require so the default (non-KMS) path never touches the AWS SDK.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { KMSClient } = require('@aws-sdk/client-kms');
+  const region = process.env.AWS_REGION ?? 'us-east-1';
+  return new KMSClient({ region });
+}
+
+/**
+ * Mint a data key for a new meeting.
+ *  - KMS_KEY_ID set  -> random 32-byte data key, KMS-encrypted under that key; we store
+ *    only the wrapped ciphertext blob (wrapped:true).
+ *  - otherwise       -> raw base64 data key via genKey() (wrapped:false) - unchanged.
+ */
+export async function createStoredKey(): Promise<StoredKey> {
+  const keyId = process.env.KMS_KEY_ID;
+  if (!keyId) return { key: genKey(), wrapped: false };
+
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { EncryptCommand } = require('@aws-sdk/client-kms');
+  const dataKey = randomBytes(32); // AES-256 data key, kept in memory only
+  const out = await kmsClient().send(
+    new EncryptCommand({ KeyId: keyId, Plaintext: dataKey }),
+  );
+  return {
+    key: Buffer.from(out.CiphertextBlob as Uint8Array).toString('base64'),
+    wrapped: true,
+  };
+}
+
+/**
+ * Resolve a StoredKey back to the RAW base64 data key that encrypt()/decrypt() expect.
+ *  - wrapped:false -> stored.key as-is (the raw key) - unchanged default path.
+ *  - wrapped:true  -> KMS Decrypt the ciphertext blob to recover the plaintext data key.
+ */
+export async function loadDataKey(stored: { key: string; wrapped?: boolean }): Promise<string> {
+  if (!stored.wrapped) return stored.key;
+
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { DecryptCommand } = require('@aws-sdk/client-kms');
+  const out = await kmsClient().send(
+    new DecryptCommand({ CiphertextBlob: Buffer.from(stored.key, 'base64') }),
+  );
+  return Buffer.from(out.Plaintext as Uint8Array).toString('base64');
+}

@@ -6,8 +6,9 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
+import { createHash } from 'crypto';
 import { Model } from 'mongoose';
-import { decrypt, encrypt, genKey } from '../crypto/crypto.util';
+import { createStoredKey, decrypt, encrypt, loadDataKey } from '../crypto/crypto.util';
 import { DecisionDto } from './dto';
 import { GovernedLine, GovernedLineDocument } from './schemas/governed-line.schema';
 import { MeetingKey, MeetingKeyDocument } from './schemas/meeting-key.schema';
@@ -15,7 +16,14 @@ import { Meeting, MeetingDocument } from './schemas/meeting.schema';
 import { Participant, ParticipantDocument } from './schemas/participant.schema';
 
 // Only these actions may have their text persisted at all. DROP/DECLINE never do.
+// These are also the "kept" actions that feed the governed summary and DSAR exports.
 const KEEP_TEXT = new Set(['COMMIT', 'REDACT', 'FLAG']);
+
+// All decision actions, in a fixed order - used for content-free audit counts/CSV.
+const ACTIONS = ['COMMIT', 'REDACT', 'FLAG', 'DROP', 'DECLINE'] as const;
+type ActionCounts = Record<(typeof ACTIONS)[number], number>;
+const zeroCounts = (): ActionCounts =>
+  ACTIONS.reduce((a, k) => ({ ...a, [k]: 0 }), {} as ActionCounts);
 
 @Injectable()
 export class MeetingsService {
@@ -29,8 +37,15 @@ export class MeetingsService {
 
   async create(owner: string, title: string) {
     const meeting = await this.meetings.create({ owner, title });
-    // give the meeting its own data key up front (used to encrypt every kept line)
-    await this.keys.create({ meeting: String(meeting._id), key: genKey() });
+    // give the meeting its own data key up front (used to encrypt every kept line).
+    // createStoredKey() is KMS-aware: env-gated envelope encryption when KMS_KEY_ID is
+    // set, otherwise a raw base64 key exactly as before (wrapped:false).
+    const stored = await createStoredKey();
+    await this.keys.create({
+      meeting: String(meeting._id),
+      key: stored.key,
+      wrapped: stored.wrapped,
+    });
     return meeting;
   }
 
@@ -55,7 +70,7 @@ export class MeetingsService {
     let enc;
     if (KEEP_TEXT.has(d.action) && d.shown) {
       const k = await this.keys.findOne({ meeting: meetingId });
-      if (k) enc = encrypt(d.shown, k.key);
+      if (k) enc = encrypt(d.shown, await loadDataKey(k)); // unwrap key (no-op when not KMS-wrapped)
     }
     const line = await this.lines.create({
       meeting: meetingId,
@@ -67,10 +82,16 @@ export class MeetingsService {
       enc,
       flagged: d.action === 'FLAG',
     });
-    // track this participant + their consent (DECLINE => not consented)
+    // track this participant + their consent (DECLINE => not consented).
+    // Identity (lite): store email when the engine provides one.
     await this.participants.updateOne(
       { meeting: meetingId, name: d.speaker },
-      { $set: { consent: d.action !== 'DECLINE' } },
+      {
+        $set: {
+          consent: d.action !== 'DECLINE',
+          ...(d.email ? { email: d.email } : {}),
+        },
+      },
       { upsert: true },
     );
     return line;
@@ -81,11 +102,13 @@ export class MeetingsService {
       this.lines.find({ meeting: meetingId }).sort({ idx: 1 }),
       this.keys.findOne({ meeting: meetingId }),
     ]);
+    // unwrap the data key once (no-op when not KMS-wrapped); null if shredded.
+    const dataKey = k ? await loadDataKey(k) : null;
     return lines.map((l) => {
       let text: string | null = null;
       let shredded = false;
       if (l.enc) {
-        if (k) text = decrypt(l.enc, k.key);
+        if (dataKey) text = decrypt(l.enc, dataKey);
         else shredded = true; // key destroyed -> unrecoverable
       }
       return {
@@ -103,11 +126,17 @@ export class MeetingsService {
   }
 
   /** In-meeting consent opt-in/out for a participant (the bot reports these live). */
-  async setConsent(owner: string, meetingId: string, name: string, granted: boolean) {
+  async setConsent(
+    owner: string,
+    meetingId: string,
+    name: string,
+    granted: boolean,
+    email?: string,
+  ) {
     await this.get(owner, meetingId);
     await this.participants.updateOne(
       { meeting: meetingId, name },
-      { $set: { consent: granted } },
+      { $set: { consent: granted, ...(email ? { email } : {}) } }, // identity (lite)
       { upsert: true },
     );
     return { meeting: meetingId, name, consent: granted };
@@ -166,5 +195,225 @@ export class MeetingsService {
     }
     await this.meetings.updateOne({ _id: meetingId }, { $set: { botStatus: 'stopped' } });
     return { ok: true };
+  }
+
+  // -------------------------------------------------------------------------
+  // (1) Governed summary - ONLY kept lines feed it (keep-only guarantee).
+  // -------------------------------------------------------------------------
+
+  /**
+   * Build a summary from this meeting's KEPT lines (COMMIT/REDACT/FLAG, decrypted, in
+   * idx order) and store it ENCRYPTED under the meeting key. DROP/DECLINE never reach
+   * the engine - the prompt only ever sees content we were allowed to keep. Returns the
+   * plaintext summary to the caller (it's persisted encrypted; crypto-shred wipes it too).
+   */
+  async generateSummary(owner: string, meetingId: string, style?: string) {
+    await this.get(owner, meetingId);
+    const k = await this.keys.findOne({ meeting: meetingId });
+    if (!k) return { summary: '' }; // shredded -> nothing to summarize
+    const dataKey = await loadDataKey(k);
+
+    const lines = await this.lines.find({ meeting: meetingId }).sort({ idx: 1 });
+    const kept = lines
+      .filter((l) => KEEP_TEXT.has(l.action) && l.enc)
+      .map((l) => ({ speaker: l.speaker, text: decrypt(l.enc!, dataKey) }));
+    if (kept.length === 0) return { summary: '' };
+
+    const engine = this.config.get<string>('PYTHON_ENGINE_URL') ?? 'http://localhost:8000';
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), 5000);
+    let res: Response;
+    try {
+      res = await fetch(`${engine}/summarize`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ lines: kept, style }),
+        signal: ctrl.signal,
+      });
+    } catch {
+      throw new BadGatewayException('Could not reach the meeting engine');
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (!res.ok) throw new BadGatewayException(await res.text());
+    const { summary } = (await res.json()) as { summary: string };
+
+    // persist encrypted under the same meeting key (shred wipes it with everything else)
+    const summaryAt = new Date();
+    await this.meetings.updateOne(
+      { _id: meetingId },
+      { $set: { summaryEnc: encrypt(summary, dataKey), summaryAt } },
+    );
+    return { summary };
+  }
+
+  /** Read back the stored summary; decrypt it. If the key is gone -> shredded. */
+  async getSummary(owner: string, meetingId: string) {
+    const m = await this.get(owner, meetingId);
+    if (!m.summaryEnc) return { summary: null, shredded: false, generatedAt: null };
+    const k = await this.keys.findOne({ meeting: meetingId });
+    if (!k) return { summary: null, shredded: true, generatedAt: m.summaryAt ?? null };
+    const dataKey = await loadDataKey(k);
+    return {
+      summary: decrypt(m.summaryEnc, dataKey),
+      shredded: false,
+      generatedAt: m.summaryAt ?? null,
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // (2) Audit / consent receipts / export - CONTENT-FREE (counts only, never words).
+  // -------------------------------------------------------------------------
+
+  /**
+   * Content-free audit: per-participant action counts, consent + opt-in timestamp, grand
+   * totals, and an integrity hash over the canonical decision log. No text anywhere.
+   */
+  async getAudit(owner: string, meetingId: string) {
+    const m = await this.get(owner, meetingId);
+    const [lines, participants] = await Promise.all([
+      this.lines.find({ meeting: meetingId }).sort({ idx: 1 }),
+      this.participants.find({ meeting: meetingId }).sort({ name: 1 }),
+    ]);
+
+    // per-speaker counts
+    const bySpeaker = new Map<string, ActionCounts>();
+    const totals = zeroCounts();
+    for (const l of lines) {
+      const c = bySpeaker.get(l.speaker) ?? zeroCounts();
+      if ((ACTIONS as readonly string[]).includes(l.action)) {
+        c[l.action as keyof ActionCounts] += 1;
+        totals[l.action as keyof ActionCounts] += 1;
+      }
+      bySpeaker.set(l.speaker, c);
+    }
+
+    const participantRows = participants.map((p) => {
+      const counts = bySpeaker.get(p.name) ?? zeroCounts();
+      return {
+        name: p.name,
+        email: p.email,
+        consent: p.consent,
+        optedInAt: (p as unknown as { updatedAt?: Date }).updatedAt ?? null,
+        counts,
+        total: ACTIONS.reduce((s, a) => s + counts[a], 0),
+      };
+    });
+
+    // integrity hash over canonical decision log: lines sorted by idx, each
+    // "idx|speaker|action|policyId|confidence" joined by "\n". No text - tamper-evidence only.
+    const canonical = lines
+      .map(
+        (l) =>
+          `${l.idx}|${l.speaker}|${l.action}|${l.policyId ?? ''}|${
+            l.confidence ?? ''
+          }`,
+      )
+      .join('\n');
+    const hash = createHash('sha256').update(canonical).digest('hex');
+
+    return {
+      meeting: { id: String(m._id), title: m.title },
+      participants: participantRows,
+      totals,
+      integrity: { algo: 'sha256' as const, hash },
+    };
+  }
+
+  /** CSV view of the audit: one row per participant, content-free. */
+  async getAuditCsv(owner: string, meetingId: string): Promise<string> {
+    const audit = await this.getAudit(owner, meetingId);
+    const header = ['name', 'email', 'consent', ...ACTIONS, 'total'].join(',');
+    const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
+    const rows = audit.participants.map((p) =>
+      [
+        esc(p.name),
+        esc(p.email ?? ''),
+        p.consent,
+        ...ACTIONS.map((a) => p.counts[a]),
+        p.total,
+      ].join(','),
+    );
+    return [header, ...rows].join('\n') + '\n';
+  }
+
+  // -------------------------------------------------------------------------
+  // (5) Self-service DSAR - owner-scoped. identity = email || name.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Look up everything we hold for an identity across the CALLER'S meetings. Matches a
+   * Participant by name OR email; returns the person's KEPT decrypted lines per meeting.
+   * Owner-scoped (per-user meetings) - org-wide DSAR needs identity resolution (future).
+   */
+  async dsarLookup(owner: string, identity: string) {
+    const myMeetings = await this.meetings.find({ owner });
+    const meetingsOut: Array<{
+      meetingId: string;
+      title: string;
+      consent: boolean;
+      lines: Array<{ idx: number; action: string; text: string | null }>;
+    }> = [];
+    let lineCount = 0;
+
+    for (const m of myMeetings) {
+      const meetingId = String(m._id);
+      const participant = await this.participants.findOne({
+        meeting: meetingId,
+        $or: [{ name: identity }, { email: identity }],
+      });
+      if (!participant) continue;
+
+      const [lines, k] = await Promise.all([
+        this.lines.find({ meeting: meetingId, speaker: participant.name }).sort({ idx: 1 }),
+        this.keys.findOne({ meeting: meetingId }),
+      ]);
+      const dataKey = k ? await loadDataKey(k) : null;
+      const kept = lines
+        .filter((l) => KEEP_TEXT.has(l.action) && l.enc)
+        .map((l) => ({
+          idx: l.idx,
+          action: l.action,
+          text: dataKey ? decrypt(l.enc!, dataKey) : null, // null when shredded
+        }));
+      lineCount += kept.length;
+      meetingsOut.push({
+        meetingId,
+        title: m.title,
+        consent: participant.consent,
+        lines: kept,
+      });
+    }
+
+    return {
+      identity,
+      meetings: meetingsOut,
+      counts: { meetings: meetingsOut.length, lines: lineCount },
+    };
+  }
+
+  /**
+   * Erase by crypto-shredding every CALLER'S meeting that contains this identity.
+   * HONEST MVP BOUNDARY: erasure is per-MEETING - we shred the WHOLE meeting's key, not
+   * just this person's lines. True per-line/per-person erasure needs per-participant keys
+   * (future). Irreversible.
+   */
+  async dsarErase(owner: string, identity: string) {
+    const myMeetings = await this.meetings.find({ owner });
+    const erased: string[] = [];
+    for (const m of myMeetings) {
+      const meetingId = String(m._id);
+      const hit = await this.participants.findOne({
+        meeting: meetingId,
+        $or: [{ name: identity }, { email: identity }],
+      });
+      if (!hit) continue;
+      await this.keys.deleteOne({ meeting: meetingId }); // crypto-shred
+      erased.push(meetingId);
+    }
+    return {
+      erased,
+      note: 'per-meeting erasure: whole meetings containing this person were crypto-shredded',
+    };
   }
 }

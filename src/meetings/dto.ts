@@ -27,6 +27,12 @@ export class DecisionDto {
   @IsOptional()
   @IsString()
   shown?: string; // the engine's display text; only stored for keep-actions
+
+  // Identity (lite): email when the Recall participant has one. Optional so existing
+  // payloads (and the /ws browser path, which has no email) keep working unchanged.
+  @IsOptional()
+  @IsString()
+  email?: string;
 }
 
 export class ConsentDto {
@@ -35,6 +41,18 @@ export class ConsentDto {
 
   @IsBoolean()
   granted: boolean;
+
+  // Identity (lite): email when known. Optional - existing payloads unaffected.
+  @IsOptional()
+  @IsString()
+  email?: string;
+}
+
+// Governed summary style hint (optional, free-form). Engine summarizes only what it's given.
+export class SummaryDto {
+  @IsOptional()
+  @IsString()
+  style?: string;
 }
 
 export class JoinDto {

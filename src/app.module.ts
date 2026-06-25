@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AppController } from './app.controller';
 import { AuthModule } from './auth/auth.module';
+import { DsarModule } from './dsar/dsar.module';
 import { MeetingsModule } from './meetings/meetings.module';
 
 @Module({
@@ -16,6 +17,7 @@ import { MeetingsModule } from './meetings/meetings.module';
     }),
     AuthModule,
     MeetingsModule,
+    DsarModule,
   ],
   controllers: [AppController],
 })

@@ -12,7 +12,12 @@ export class Participant {
   meeting: string;
 
   @Prop({ required: true })
-  name: string; // participant identity / speaker id
+  name: string; // participant identity / speaker id (display name)
+
+  // Identity (lite): the participant's email when the Recall participant exposes one.
+  // identity = email || name is what DSAR matches on. Full Okta/Workspace SCIM is future.
+  @Prop()
+  email?: string;
 
   @Prop({ default: false })
   consent: boolean;
