@@ -3,4 +3,6 @@ dist
 .env
 .env.*
 .git
-npm-debug.log
+npm-debug.log*
+test
+*.md
