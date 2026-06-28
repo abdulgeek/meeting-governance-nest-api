@@ -8,6 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { createHash } from 'crypto';
 import { Model } from 'mongoose';
+import { Subject } from 'rxjs';
 import { decrypt, encrypt, genKey } from '../crypto/crypto.util';
 import { DecisionDto } from './dto';
 import { GovernedLine, GovernedLineDocument } from './schemas/governed-line.schema';
@@ -18,6 +19,17 @@ import { Participant, ParticipantDocument } from './schemas/participant.schema';
 // Only these actions may have their text persisted at all. DROP/DECLINE never do.
 // These are also the "kept" actions that feed the governed summary and DSAR exports.
 const KEEP_TEXT = new Set(['COMMIT', 'REDACT', 'FLAG']);
+
+// The shape getLines returns for one row (and the shape we publish over SSE).
+export interface GovernedLineView {
+  idx: number;
+  speaker: string;
+  action: string;
+  policyId?: string | null;
+  confidence?: number | null;
+  text: string | null;
+  shredded: boolean;
+}
 
 // All decision actions, in a fixed order - used for content-free audit counts/CSV.
 const ACTIONS = ['COMMIT', 'REDACT', 'FLAG', 'DROP', 'DECLINE'] as const;
@@ -34,6 +46,29 @@ export class MeetingsService {
     @InjectModel(Participant.name) private participants: Model<ParticipantDocument>,
     private config: ConfigService,
   ) {}
+
+  // -------------------------------------------------------------------------
+  // Real-time pub/sub: one in-memory Subject per meeting. addDecision publishes
+  // each governed line here; the SSE stream subscribes to push it to the dashboard.
+  // In-memory only (single instance) - fine for the demo; multi-instance would
+  // need a shared bus (Redis pub/sub) instead.
+  // -------------------------------------------------------------------------
+  private streams = new Map<string, Subject<GovernedLineView>>();
+
+  /** Get (or lazily create) the Subject that carries one meeting's live lines. */
+  getStream(meetingId: string): Subject<GovernedLineView> {
+    let s = this.streams.get(meetingId);
+    if (!s) {
+      s = new Subject<GovernedLineView>();
+      this.streams.set(meetingId, s);
+    }
+    return s;
+  }
+
+  /** Publish one governed line to a meeting's subscribers (no-op if none yet). */
+  publishLine(meetingId: string, line: GovernedLineView) {
+    this.getStream(meetingId).next(line);
+  }
 
   async create(owner: string, title: string) {
     const meeting = await this.meetings.create({ owner, title });
@@ -104,6 +139,27 @@ export class MeetingsService {
         },
         { upsert: true },
       );
+    }
+
+    // Publish to live subscribers in the SAME shape getLines returns for one row:
+    // text decrypted for kept actions, null for PENDING / DROP / DECLINE.
+    if (line) {
+      let text: string | null = null;
+      let shredded = false;
+      if (line.enc) {
+        const k = await this.keys.findOne({ meeting: meetingId });
+        if (k) text = decrypt(line.enc, k.key);
+        else shredded = true; // key destroyed -> unrecoverable
+      }
+      this.publishLine(meetingId, {
+        idx: line.idx,
+        speaker: line.speaker,
+        action: line.action,
+        policyId: line.policyId,
+        confidence: line.confidence,
+        text,
+        shredded,
+      });
     }
     return line;
   }
