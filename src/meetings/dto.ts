@@ -13,7 +13,7 @@ export class DecisionDto {
   @IsString()
   speaker: string;
 
-  @IsIn(['COMMIT', 'DROP', 'REDACT', 'FLAG', 'DECLINE'])
+  @IsIn(['COMMIT', 'DROP', 'REDACT', 'FLAG', 'DECLINE', 'PENDING'])
   action: string;
 
   @IsOptional()

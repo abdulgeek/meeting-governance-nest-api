@@ -65,28 +65,46 @@ export class MeetingsService {
       const k = await this.keys.findOne({ meeting: meetingId });
       if (k) enc = encrypt(d.shown, k.key);
     }
-    const line = await this.lines.create({
-      meeting: meetingId,
-      idx: d.idx,
-      speaker: d.speaker,
-      action: d.action,
-      policyId: d.policyId,
-      confidence: d.confidence,
-      enc,
-      flagged: d.action === 'FLAG',
-    });
-    // track this participant + their consent (DECLINE => not consented).
-    // Identity (lite): store email when the engine provides one.
-    await this.participants.updateOne(
-      { meeting: meetingId, name: d.speaker },
+    // UPSERT by {meeting, idx}: the engine first posts a PENDING placeholder, then the
+    // FINAL decision with the SAME idx. Upserting (not always creating) lets the final
+    // decision replace the placeholder in place - no duplicate rows.
+    await this.lines.updateOne(
+      { meeting: meetingId, idx: d.idx },
       {
         $set: {
-          consent: d.action !== 'DECLINE',
-          ...(d.email ? { email: d.email } : {}),
+          speaker: d.speaker,
+          action: d.action,
+          policyId: d.policyId,
+          confidence: d.confidence,
+          enc, // undefined for PENDING / non-keep actions -> no text persisted
+          flagged: d.action === 'FLAG',
         },
       },
       { upsert: true },
     );
+    const line = await this.lines.findOne({ meeting: meetingId, idx: d.idx });
+    // track this participant. For PENDING (a pre-governance placeholder) just ensure the
+    // participant exists and record name/email WITHOUT touching consent. For real actions
+    // set consent (DECLINE => not consented).
+    // Identity (lite): store email when the engine provides one.
+    if (d.action === 'PENDING') {
+      await this.participants.updateOne(
+        { meeting: meetingId, name: d.speaker },
+        { $set: { ...(d.email ? { email: d.email } : {}) } },
+        { upsert: true },
+      );
+    } else {
+      await this.participants.updateOne(
+        { meeting: meetingId, name: d.speaker },
+        {
+          $set: {
+            consent: d.action !== 'DECLINE',
+            ...(d.email ? { email: d.email } : {}),
+          },
+        },
+        { upsert: true },
+      );
+    }
     return line;
   }
 
