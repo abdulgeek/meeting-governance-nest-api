@@ -31,18 +31,18 @@
 
 Create a `.env` file in this directory with:
 
-| Variable            | Required | Description                                              |
-| ------------------- | -------- | -------------------------------------------------------- |
-| `MONGO_URI`         | yes      | MongoDB connection string (e.g. `mongodb://localhost:27017/governance`). |
-| `JWT_SECRET`        | yes      | Secret used to sign/verify auth tokens. Startup fails fast if unset. |
-| `PORT`              | no       | Port the API listens on (defaults to `4000`).            |
+| Variable            | Required | Description                                                                     |
+| ------------------- | -------- | ------------------------------------------------------------------------------- |
+| `MONGO_URI`         | yes      | MongoDB connection string (e.g. `mongodb://localhost:27017/governance`).        |
+| `JWT_SECRET`        | yes      | Secret used to sign/verify auth tokens. Startup fails fast if unset.            |
+| `PORT`              | no       | Port the API listens on (defaults to `4000`).                                   |
 | `PYTHON_ENGINE_URL` | no       | Base URL of the Python governance engine (defaults to `http://localhost:8000`). |
 
 #### Crypto-shredding
 
 Every meeting gets its own AES-256 data key; all kept lines (and the governed summary) are
 encrypted under it. Deleting that key ("crypto-shred") makes the content permanently
-unreadable — provable absence without trusting row deletion.
+unreadable - provable absence without trusting row deletion.
 
 #### Honest MVP boundaries
 
@@ -50,9 +50,9 @@ unreadable — provable absence without trusting row deletion.
   Okta/Workspace SCIM identity resolution is future.
 - **DSAR erasure** is per-**meeting**: erasing an identity crypto-shreds the whole meetings
   that contain that person (not just their individual lines). True per-line/per-person
-  erasure needs per-participant keys (future). DSAR is also owner-scoped — a caller only sees
+  erasure needs per-participant keys (future). DSAR is also owner-scoped - a caller only sees
   and erases within their own meetings.
-- **Audit/export** is content-free: counts, consent, and an integrity hash only — never the
+- **Audit/export** is content-free: counts, consent, and an integrity hash only - never the
   words.
 
 ### Install
